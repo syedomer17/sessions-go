@@ -19,18 +19,20 @@ func GenerateSessionID() string {
 	return hex.EncodeToString(bytes)
 }
 
-func CreateSession(userID string) (string, error) {
+func CreateSession(userID string, ip string, userAgent string) (string, error) {
 	sessionID := GenerateSessionID()
 
 	session := models.Session{
 		SessionID: sessionID,
 		UserID:    userID,
+		IP:        ip,
+		UserAgent: userAgent,
 		ExpiresAt: time.Now().Add(24 * time.Hour),
 	}
 
 	collection := config.DB.Collection("sessions")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	_, err := collection.InsertOne(ctx, session)
@@ -39,13 +41,20 @@ func CreateSession(userID string) (string, error) {
 		return "", err
 	}
 
+	config.RedisClient.Set(
+		ctx,
+		sessionID,
+		userID,
+		24*time.Hour,
+	)
+
 	return sessionID, nil
 }
 
 func FindSession(sessionID string) (*models.Session, error) {
 	collections := config.DB.Collection("sessions")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	var session models.Session
@@ -64,7 +73,7 @@ func FindSession(sessionID string) (*models.Session, error) {
 func DeleteSession(sessionID string) error {
 	collections := config.DB.Collection("sessions")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	_, err := collections.DeleteOne(ctx, bson.M{
@@ -76,4 +85,20 @@ func DeleteSession(sessionID string) error {
 	}
 
 	return nil
+}
+
+func RotateSession(oldSessionID string, userID string) (string, error) {
+	err := DeleteSession(oldSessionID)
+
+	if err != nil {
+		return "", err
+	}
+
+	newSessionID, err := CreateSession(userID, "", "")
+
+	if err != nil {
+		return "", err
+	}
+
+	return newSessionID, nil
 }

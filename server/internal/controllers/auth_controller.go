@@ -87,7 +87,7 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	sessionID, err := services.CreateSession(user.ID.Hex())
+	sessionID, err := services.CreateSession(user.ID.Hex(), c.ClientIP(), c.Request.UserAgent())
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "session creation failed"})

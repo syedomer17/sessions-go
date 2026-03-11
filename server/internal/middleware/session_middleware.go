@@ -26,6 +26,20 @@ func SessionMiddleware() gin.HandlerFunc {
 			return
 		}
 
+		if session.IP != c.ClientIP() {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "Unauthorized: IP address mismatch",
+			})
+			return
+		}
+
+		if session.UserAgent != c.Request.UserAgent() {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "Unauthorized: User agent mismatch",
+			})
+			return
+		}
+
 		c.Set("user_id", session.UserID)
 
 		c.Next()
