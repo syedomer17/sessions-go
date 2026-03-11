@@ -3,36 +3,134 @@ package controllers
 import (
 	"context"
 	"net/http"
+	"session-demo/internal/config"
+	"session-demo/internal/models"
+	"session-demo/internal/services"
+	"session-demo/internal/utils"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/gohugoio/hugo/tpl/collections"
-	"github.com/google/uuid"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"golang.org/x/crypto/bcrypt"
 )
 
-func login(c *gin.Context){
-	sessionID := uuid.New().String()
+func Register(c *gin.Context) {
+	var user models.User
 
-	session := bson.M{
-		"session_id": sessionID,
-		"user_id": "12345",
-		"expires_at": time.Now().Add(24 * time.Hour),
+	if err := c.ShouldBindJSON(&user); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid input",
+		})
+		return
 	}
 
-	collections.Sessions.InsertOne(context.TODO(), session)
+	hash, err := bcrypt.GenerateFromPassword([]byte(user.Password), 10)
 
-	c.Cookie(
-		"session_id",
-		sessionID,
-		3600*24,
-		"/",
-		"localhost",
-		false,
-		true,
-	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "failed to hash password",
+		})
+		return
+	}
+
+	user.Password = string(hash)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	collection := config.DB.Collection("users")
+
+	_, err = collection.InsertOne(ctx, user)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "failed to create user",
+		})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message": "logged in",
+		"message": "user created successfully",
+	})
+}
+
+func Login(c *gin.Context) {
+	var input models.User
+
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid input",
+		})
+		return
+	}
+
+	collection := config.DB.Collection("users")
+
+	var user models.User
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := collection.FindOne(ctx, bson.M{
+		"email": input.Email,
+	}).Decode(&user)
+
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		return
+	}
+
+	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(input.Password))
+
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		return
+	}
+
+	sessionID, err := services.CreateSession(user.ID.Hex())
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "session creation failed"})
+		return
+	}
+
+	utils.SetSessionCookie(sessionID, c)
+
+	c.JSON(http.StatusOK, gin.H{"message": "login successful"})
+}
+
+func Profile(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+
+	if !exists {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "user id not found in context"})
+		return
+	}
+
+	collection := config.DB.Collection("users")
+
+	var user models.User
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	oid, err := bson.ObjectIDFromHex(userID.(string))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
+		return
+	}
+
+	err = collection.FindOne(ctx, bson.M{
+		"_id": oid,
+	}).Decode(&user)
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch user profile"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":    user.ID.Hex(),
+		"email": user.Email,
 	})
 }
